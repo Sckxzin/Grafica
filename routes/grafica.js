@@ -2,7 +2,6 @@ const router = require('express').Router();
 const { db, pool } = require('../db');
 const { auth } = require('../auth');
 
-// Aplica auth em todas as rotas
 router.use(auth);
 
 // ─── HELPERS ────────────────────────────────────────────────
@@ -31,14 +30,20 @@ router.get('/painel', async (req, res) => {
     const gid = req.gid;
     const [totalCob, clientesCob, statusPed, matBaixo, entHoje, entAtras, cobAtras, ultPedidos, topCob] = await Promise.all([
       db.one(`SELECT COALESCE(SUM(CASE WHEN tipo='debito' THEN valor ELSE -valor END),0) AS t FROM cobrancas WHERE grafica_id=$1`, [gid]),
-      db.one(`SELECT COUNT(DISTINCT cliente_id) AS n FROM cobrancas WHERE grafica_id=$1 GROUP BY grafica_id HAVING SUM(CASE WHEN tipo='debito' THEN valor ELSE -valor END)>0`, [gid]).catch(()=>({n:0})),
+      db.one(`SELECT COUNT(*) AS n FROM (SELECT cliente_id FROM cobrancas WHERE grafica_id=$1 GROUP BY cliente_id HAVING SUM(CASE WHEN tipo='debito' THEN valor ELSE -valor END)>0) t`, [gid]),
       db(`SELECT status, COUNT(*) AS n FROM pedidos WHERE grafica_id=$1 GROUP BY status`, [gid]),
       db.one(`SELECT COUNT(*) AS n FROM materiais WHERE grafica_id=$1 AND quantidade<=qtd_minima`, [gid]),
       db.one(`SELECT COUNT(*) AS n FROM pedidos WHERE grafica_id=$1 AND data_entrega=CURRENT_DATE AND status!='entregue'`, [gid]),
       db.one(`SELECT COUNT(*) AS n FROM pedidos WHERE grafica_id=$1 AND data_entrega<CURRENT_DATE AND status NOT IN ('entregue','cancelado')`, [gid]),
       db.one(`SELECT COUNT(*) AS n FROM (SELECT cliente_id FROM cobrancas WHERE grafica_id=$1 AND tipo='debito' GROUP BY cliente_id HAVING SUM(CASE WHEN tipo='debito' THEN valor ELSE -valor END)>0 AND MAX(CASE WHEN tipo='debito' THEN data END)<=CURRENT_DATE-INTERVAL '30 days') t`, [gid]),
       db(`SELECT p.*,c.nome AS cnome,c.apelido AS capelido FROM pedidos p JOIN clientes c ON p.cliente_id=c.id WHERE p.grafica_id=$1 AND p.status NOT IN ('entregue','cancelado') ORDER BY p.data_entrega ASC NULLS LAST LIMIT 5`, [gid]),
-      db(`SELECT c.id,c.nome,c.apelido,c.telefone, SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END) AS saldo, MAX(CASE WHEN cb.tipo='debito' THEN cb.data END) AS ultimo FROM cobrancas cb JOIN clientes c ON cb.cliente_id=c.id WHERE cb.grafica_id=$1 GROUP BY c.id HAVING saldo>0 ORDER BY saldo DESC LIMIT 5`, [gid]),
+      db(`SELECT c.id,c.nome,c.apelido,c.telefone,
+          SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END) AS saldo,
+          MAX(CASE WHEN cb.tipo='debito' THEN cb.data END) AS ultimo
+          FROM cobrancas cb JOIN clientes c ON cb.cliente_id=c.id
+          WHERE cb.grafica_id=$1 GROUP BY c.id
+          HAVING SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END)>0
+          ORDER BY SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END) DESC LIMIT 5`, [gid]),
     ]);
     const ps = {}; statusPed.forEach(r => ps[r.status] = parseInt(r.n));
     res.json({
@@ -154,8 +159,9 @@ router.get('/cobrancas', async (req, res) => {
     FROM clientes c
     LEFT JOIN cobrancas cb ON cb.cliente_id=c.id AND cb.grafica_id=$1
     WHERE c.grafica_id=$1
-    GROUP BY c.id HAVING saldo>0
-    ORDER BY saldo DESC`, [gid]));
+    GROUP BY c.id
+    HAVING COALESCE(SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END),0) > 0
+    ORDER BY COALESCE(SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END),0) DESC`, [gid]));
 });
 
 router.post('/cobrancas', async (req, res) => {
