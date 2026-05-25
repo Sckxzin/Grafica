@@ -728,6 +728,7 @@ function iniciarApp() {
 // NAVEGAÇÃO
 // ════════════════════════════════════════════
 const pInfo = {
+  relatorios:{ t: 'Relatórios', s: 'Financeiro do mês' },
   painel:    { t: 'Painel',         s: 'Visão geral do negócio' },
   pedidos:   { t: 'Pedidos',        s: 'Controle de encomendas' },
   cobrancas: { t: 'Cobranças',      s: 'Débitos e pagamentos' },
@@ -748,9 +749,41 @@ function ir(p) {
   if (p === 'painel')    carregarPainel();
   if (p === 'pedidos')   carregarPedidos();
   if (p === 'cobrancas') carregarCobs();
+  if (p === 'relatorios') carregarRelatorios();
   if (p === 'clientes')  carregarClientes();
   if (p === 'materiais') carregarMats();
   if (p === 'config')    carregarConfig();
+}
+
+// ════════════════════════════════════════════
+// RELATÓRIOS
+// ════════════════════════════════════════════
+async function carregarRelatorios(){
+  const g = await api('/config');
+  if(!g) return;
+  ME.plano = g.plano;
+  localStorage.setItem('xz_me', JSON.stringify(ME));
+  if($('rel-lock')) $('rel-lock').style.display = ['pro','premium','vitalicio'].includes(g.plano) ? 'none' : 'inline';
+
+  if(!['pro','premium','vitalicio'].includes(g.plano)){
+    $('rel-bloqueado').style.display='block';
+    $('rel-conteudo').style.display='none';
+    return;
+  }
+  $('rel-bloqueado').style.display='none';
+  $('rel-conteudo').style.display='block';
+  const d=await api('/relatorios');
+  if(!d||d.erro){ $('rel-conteudo').innerHTML='<p style="color:var(--t3);padding:20px">'+( d?.erro||'Erro ao carregar')+'</p>'; return; }
+  const variacao=d.faturamentoMesAnterior>0?((d.faturamentoMes-d.faturamentoMesAnterior)/d.faturamentoMesAnterior*100).toFixed(1):null;
+  const varHtml=variacao!==null?`<div class="rel-variacao ${parseFloat(variacao)>=0?'rel-up':'rel-down'}">${parseFloat(variacao)>=0?'↑':'↓'} ${Math.abs(variacao)}% vs mês anterior</div>`:'';
+  $('rel-stats').innerHTML=`
+    <div class="rel-card"><div class="rel-card-title">Faturamento do Mês</div><div class="rel-card-val gold">${fmt(d.faturamentoMes)}</div>${varHtml}</div>
+    <div class="rel-card"><div class="rel-card-title">Total Recebido</div><div class="rel-card-val green">${fmt(d.totalRecebido)}</div><div class="rel-card-sub">Mês atual</div></div>
+    <div class="rel-card"><div class="rel-card-title">A Receber</div><div class="rel-card-val red">${fmt(d.totalPendente)}</div><div class="rel-card-sub">Pendente no mês</div></div>
+    <div class="rel-card"><div class="rel-card-title">Ticket Médio</div><div class="rel-card-val">${fmt(d.ticketMedio)}</div><div class="rel-card-sub">Por pedido</div></div>
+    <div class="rel-card"><div class="rel-card-title">Mês Anterior</div><div class="rel-card-val">${fmt(d.faturamentoMesAnterior)}</div></div>`;
+  $('rel-tipos').innerHTML=(d.porTipo||[]).length?d.porTipo.map(t=>`<tr><td><span class="badge b-neutral">${t.tipo}</span></td><td>${t.n}</td><td class="v-gold">${fmt(t.total)}</td></tr>`).join(''):'<tr><td colspan="3" style="text-align:center;color:var(--t3);padding:20px">Sem dados</td></tr>';
+  $('rel-clientes').innerHTML=(d.topClientes||[]).length?d.topClientes.map(c=>`<tr><td><div class="td-m">${c.apelido||c.nome}</div></td><td>${c.pedidos}</td><td class="v-gold">${fmt(c.total)}</td></tr>`).join(''):'<tr><td colspan="3" style="text-align:center;color:var(--t3);padding:20px">Sem dados</td></tr>';
 }
 
 // ════════════════════════════════════════════

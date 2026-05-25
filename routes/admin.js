@@ -11,7 +11,7 @@ function ip(req) {
 router.post('/setup', async (req, res) => {
   try {
     const { nome, email, senha, setup_key } = req.body;
-    const esperada = 'setup2025';
+    const esperada = (process.env.ADMIN_SETUP_KEY || '').trim();
     const recebida = (setup_key || '').trim();
     console.log(`[SETUP] esperada="${esperada}" recebida="${recebida}"`);
     if (!esperada) return res.status(500).json({ erro: 'ADMIN_SETUP_KEY não configurada' });
