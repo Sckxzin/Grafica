@@ -17,6 +17,7 @@ async function checarPlano(gid) {
   const g = await db.one('SELECT plano, plano_expira FROM graficas WHERE id=$1', [gid]);
   if (!g) return { ok: false, erro: 'Gráfica não encontrada' };
   if (g.plano_expira && new Date(g.plano_expira) < new Date()) return { ok: false, erro: 'Plano expirado. Contate o suporte.' };
+  if (g.plano === 'vitalicio') return { ok: true };
   if (g.plano === 'gratuito') {
     const t = await db.one('SELECT COUNT(*) AS n FROM clientes WHERE grafica_id=$1', [gid]);
     if (parseInt(t.n) >= 20) return { ok: false, erro: 'Limite do plano gratuito: 20 clientes. Faça upgrade para Pro.' };
@@ -56,6 +57,42 @@ router.get('/painel', async (req, res) => {
       cobAtras: parseInt(cobAtras.n),
       ultPedidos,
       topCob,
+    });
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro interno' }); }
+});
+
+// ─── RELATÓRIOS (Pro/Premium/Vitalício) ─────────────────────
+router.get('/relatorios', async (req, res) => {
+  try {
+    const gid = req.gid;
+    const g = await db.one('SELECT plano FROM graficas WHERE id=$1', [gid]);
+    if (g.plano === 'gratuito') return res.status(403).json({ erro: 'Disponível apenas nos planos Pro, Premium e Vitalício.' });
+
+    const [
+      faturamentoMes, faturamentoMesAnterior,
+      totalRecebido, totalPendente,
+      ticketMedio, porTipo,
+      topClientes, pedidosPorStatus
+    ] = await Promise.all([
+      db.one(`SELECT COALESCE(SUM(valor_total),0) AS t FROM pedidos WHERE grafica_id=$1 AND DATE_TRUNC('month',criado_em)=DATE_TRUNC('month',NOW()) AND status!='cancelado'`, [gid]),
+      db.one(`SELECT COALESCE(SUM(valor_total),0) AS t FROM pedidos WHERE grafica_id=$1 AND DATE_TRUNC('month',criado_em)=DATE_TRUNC('month',NOW()-INTERVAL '1 month') AND status!='cancelado'`, [gid]),
+      db.one(`SELECT COALESCE(SUM(valor_pago),0) AS t FROM pedidos WHERE grafica_id=$1 AND DATE_TRUNC('month',criado_em)=DATE_TRUNC('month',NOW())`, [gid]),
+      db.one(`SELECT COALESCE(SUM(valor_total-valor_pago),0) AS t FROM pedidos WHERE grafica_id=$1 AND DATE_TRUNC('month',criado_em)=DATE_TRUNC('month',NOW()) AND status!='cancelado'`, [gid]),
+      db.one(`SELECT COALESCE(AVG(valor_total),0) AS t FROM pedidos WHERE grafica_id=$1 AND DATE_TRUNC('month',criado_em)=DATE_TRUNC('month',NOW()) AND status!='cancelado'`, [gid]),
+      db(`SELECT tipo, COUNT(*) AS n, COALESCE(SUM(valor_total),0) AS total FROM pedidos WHERE grafica_id=$1 AND DATE_TRUNC('month',criado_em)=DATE_TRUNC('month',NOW()) AND status!='cancelado' GROUP BY tipo ORDER BY total DESC`, [gid]),
+      db(`SELECT c.nome,c.apelido,COUNT(p.id) AS pedidos,COALESCE(SUM(p.valor_total),0) AS total FROM pedidos p JOIN clientes c ON p.cliente_id=c.id WHERE p.grafica_id=$1 AND p.status!='cancelado' GROUP BY c.id,c.nome,c.apelido ORDER BY total DESC LIMIT 5`, [gid]),
+      db(`SELECT status, COUNT(*) AS n FROM pedidos WHERE grafica_id=$1 GROUP BY status`, [gid]),
+    ]);
+
+    res.json({
+      faturamentoMes: parseFloat(faturamentoMes.t),
+      faturamentoMesAnterior: parseFloat(faturamentoMesAnterior.t),
+      totalRecebido: parseFloat(totalRecebido.t),
+      totalPendente: parseFloat(totalPendente.t),
+      ticketMedio: parseFloat(ticketMedio.t),
+      porTipo,
+      topClientes,
+      pedidosPorStatus,
     });
   } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro interno' }); }
 });
@@ -147,6 +184,27 @@ router.put('/pedidos/:id', async (req, res) => {
 router.delete('/pedidos/:id', async (req, res) => {
   await db('DELETE FROM pedidos WHERE id=$1 AND grafica_id=$2', [req.params.id, req.gid]);
   res.json({ ok: true });
+});
+
+// Baixa de estoque ao entrar em produção
+router.post('/pedidos/:id/baixa-estoque', async (req, res) => {
+  const { materiais } = req.body;
+  if (!materiais?.length) return res.status(400).json({ erro: 'Nenhum material informado' });
+  const gid = req.gid;
+  try {
+    for (const m of materiais) {
+      if (!m.quantidade || m.quantidade <= 0) continue;
+      const mat = await db.one('SELECT * FROM materiais WHERE id=$1 AND grafica_id=$2', [m.id, gid]);
+      if (!mat) continue;
+      const nova = Math.max(0, parseFloat(mat.quantidade) - parseFloat(m.quantidade));
+      await db('UPDATE materiais SET quantidade=$1 WHERE id=$2', [nova, mat.id]);
+      await db(
+        'INSERT INTO logs (grafica_id,tipo,descricao) VALUES ($1,$2,$3)',
+        [gid, 'baixa_estoque', `Baixa: ${mat.nome} -${m.quantidade} ${mat.unidade} (Pedido #${req.params.id})`]
+      );
+    }
+    res.json({ ok: true });
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao dar baixa' }); }
 });
 
 // ─── COBRANÇAS ──────────────────────────────────────────────
