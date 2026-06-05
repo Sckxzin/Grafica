@@ -4,21 +4,19 @@ async function setup() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
     await client.query(`
       CREATE TABLE IF NOT EXISTS graficas (
-        id          SERIAL PRIMARY KEY,
-        nome        TEXT NOT NULL,
-        email       TEXT NOT NULL UNIQUE,
-        senha_hash  TEXT NOT NULL,
-        plano       TEXT DEFAULT 'gratuito',
-        plano_expira DATE,
-        ativo       BOOLEAN DEFAULT true,
+        id              SERIAL PRIMARY KEY,
+        nome            TEXT NOT NULL,
+        email           TEXT NOT NULL UNIQUE,
+        senha_hash      TEXT NOT NULL,
+        plano           TEXT DEFAULT 'gratuito',
+        plano_expira    DATE,
+        ativo           BOOLEAN DEFAULT true,
         motivo_bloqueio TEXT,
         ultimo_acesso   TIMESTAMP,
-        criado_em   TIMESTAMP DEFAULT NOW()
+        criado_em       TIMESTAMP DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS admins (
         id          SERIAL PRIMARY KEY,
         nome        TEXT NOT NULL,
@@ -26,7 +24,6 @@ async function setup() {
         senha_hash  TEXT NOT NULL,
         criado_em   TIMESTAMP DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS logs (
         id          SERIAL PRIMARY KEY,
         grafica_id  INT REFERENCES graficas(id) ON DELETE CASCADE,
@@ -36,7 +33,6 @@ async function setup() {
         ip          TEXT,
         criado_em   TIMESTAMP DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS tentativas (
         id          SERIAL PRIMARY KEY,
         email       TEXT NOT NULL,
@@ -44,7 +40,6 @@ async function setup() {
         ok          BOOLEAN DEFAULT false,
         criado_em   TIMESTAMP DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS clientes (
         id          SERIAL PRIMARY KEY,
         grafica_id  INT NOT NULL REFERENCES graficas(id) ON DELETE CASCADE,
@@ -56,7 +51,6 @@ async function setup() {
         observacoes TEXT,
         criado_em   TIMESTAMP DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS pedidos (
         id            SERIAL PRIMARY KEY,
         grafica_id    INT NOT NULL REFERENCES graficas(id) ON DELETE CASCADE,
@@ -72,7 +66,6 @@ async function setup() {
         observacoes   TEXT,
         criado_em     TIMESTAMP DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS cobrancas (
         id          SERIAL PRIMARY KEY,
         grafica_id  INT NOT NULL REFERENCES graficas(id) ON DELETE CASCADE,
@@ -84,7 +77,6 @@ async function setup() {
         data        DATE DEFAULT CURRENT_DATE,
         criado_em   TIMESTAMP DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS materiais (
         id              SERIAL PRIMARY KEY,
         grafica_id      INT NOT NULL REFERENCES graficas(id) ON DELETE CASCADE,
@@ -95,14 +87,24 @@ async function setup() {
         qtd_minima      NUMERIC(10,2) DEFAULT 0,
         criado_em       TIMESTAMP DEFAULT NOW()
       );
-
-      CREATE INDEX IF NOT EXISTS idx_clientes_gid   ON clientes(grafica_id);
-      CREATE INDEX IF NOT EXISTS idx_pedidos_gid    ON pedidos(grafica_id);
-      CREATE INDEX IF NOT EXISTS idx_cobrancas_gid  ON cobrancas(grafica_id);
-      CREATE INDEX IF NOT EXISTS idx_materiais_gid  ON materiais(grafica_id);
-      CREATE INDEX IF NOT EXISTS idx_logs_gid       ON logs(grafica_id);
+      CREATE TABLE IF NOT EXISTS caixa (
+        id          SERIAL PRIMARY KEY,
+        grafica_id  INT NOT NULL REFERENCES graficas(id) ON DELETE CASCADE,
+        tipo        TEXT NOT NULL CHECK (tipo IN ('entrada','saida')),
+        valor       NUMERIC(10,2) NOT NULL,
+        categoria   TEXT NOT NULL DEFAULT 'Outros',
+        descricao   TEXT,
+        data        DATE DEFAULT CURRENT_DATE,
+        criado_em   TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_clientes_gid  ON clientes(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_pedidos_gid   ON pedidos(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_cobrancas_gid ON cobrancas(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_materiais_gid ON materiais(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_caixa_gid     ON caixa(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_caixa_data    ON caixa(data DESC);
+      CREATE INDEX IF NOT EXISTS idx_logs_gid      ON logs(grafica_id);
     `);
-
     await client.query('COMMIT');
     console.log('✅ Tabelas prontas!');
   } catch (e) {

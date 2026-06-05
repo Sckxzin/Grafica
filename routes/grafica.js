@@ -6,10 +6,7 @@ router.use(auth);
 
 // ─── HELPERS ────────────────────────────────────────────────
 async function saldo(gid, clienteId) {
-  const r = await db.one(
-    `SELECT COALESCE(SUM(CASE WHEN tipo='debito' THEN valor ELSE -valor END),0) AS s FROM cobrancas WHERE grafica_id=$1 AND cliente_id=$2`,
-    [gid, clienteId]
-  );
+  const r = await db.one(`SELECT COALESCE(SUM(CASE WHEN tipo='debito' THEN valor ELSE -valor END),0) AS s FROM cobrancas WHERE grafica_id=$1 AND cliente_id=$2`, [gid, clienteId]);
   return parseFloat(r.s);
 }
 
@@ -20,16 +17,20 @@ async function checarPlano(gid) {
   if (g.plano === 'vitalicio') return { ok: true };
   if (g.plano === 'gratuito') {
     const t = await db.one('SELECT COUNT(*) AS n FROM clientes WHERE grafica_id=$1', [gid]);
-    if (parseInt(t.n) >= 20) return { ok: false, erro: 'Limite do plano gratuito: 20 clientes. Faça upgrade para Pro.' };
+    if (parseInt(t.n) >= 20) return { ok: false, erro: 'Limite do plano gratuito: 20 clientes. Faça upgrade.' };
   }
   return { ok: true };
+}
+
+function temRelatorio(plano) {
+  return ['pro', 'premium', 'vitalicio'].includes(plano);
 }
 
 // ─── PAINEL ─────────────────────────────────────────────────
 router.get('/painel', async (req, res) => {
   try {
     const gid = req.gid;
-    const [totalCob, clientesCob, statusPed, matBaixo, entHoje, entAtras, cobAtras, ultPedidos, topCob] = await Promise.all([
+    const [totalCob, clientesCob, statusPed, matBaixo, entHoje, entAtras, cobAtras, ultPedidos, topCob, saldoCaixa] = await Promise.all([
       db.one(`SELECT COALESCE(SUM(CASE WHEN tipo='debito' THEN valor ELSE -valor END),0) AS t FROM cobrancas WHERE grafica_id=$1`, [gid]),
       db.one(`SELECT COUNT(*) AS n FROM (SELECT cliente_id FROM cobrancas WHERE grafica_id=$1 GROUP BY cliente_id HAVING SUM(CASE WHEN tipo='debito' THEN valor ELSE -valor END)>0) t`, [gid]),
       db(`SELECT status, COUNT(*) AS n FROM pedidos WHERE grafica_id=$1 GROUP BY status`, [gid]),
@@ -38,42 +39,21 @@ router.get('/painel', async (req, res) => {
       db.one(`SELECT COUNT(*) AS n FROM pedidos WHERE grafica_id=$1 AND data_entrega<CURRENT_DATE AND status NOT IN ('entregue','cancelado')`, [gid]),
       db.one(`SELECT COUNT(*) AS n FROM (SELECT cliente_id FROM cobrancas WHERE grafica_id=$1 AND tipo='debito' GROUP BY cliente_id HAVING SUM(CASE WHEN tipo='debito' THEN valor ELSE -valor END)>0 AND MAX(CASE WHEN tipo='debito' THEN data END)<=CURRENT_DATE-INTERVAL '30 days') t`, [gid]),
       db(`SELECT p.*,c.nome AS cnome,c.apelido AS capelido FROM pedidos p JOIN clientes c ON p.cliente_id=c.id WHERE p.grafica_id=$1 AND p.status NOT IN ('entregue','cancelado') ORDER BY p.data_entrega ASC NULLS LAST LIMIT 5`, [gid]),
-      db(`SELECT c.id,c.nome,c.apelido,c.telefone,
-          SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END) AS saldo,
-          MAX(CASE WHEN cb.tipo='debito' THEN cb.data END) AS ultimo
-          FROM cobrancas cb JOIN clientes c ON cb.cliente_id=c.id
-          WHERE cb.grafica_id=$1 GROUP BY c.id
-          HAVING SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END)>0
-          ORDER BY SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END) DESC LIMIT 5`, [gid]),
+      db(`SELECT c.id,c.nome,c.apelido,c.telefone, SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END) AS saldo, MAX(CASE WHEN cb.tipo='debito' THEN cb.data END) AS ultimo FROM cobrancas cb JOIN clientes c ON cb.cliente_id=c.id WHERE cb.grafica_id=$1 GROUP BY c.id HAVING SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END)>0 ORDER BY SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END) DESC LIMIT 5`, [gid]),
+      db.one(`SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN valor ELSE -valor END),0) AS s FROM caixa WHERE grafica_id=$1 AND DATE_TRUNC('month',data)=DATE_TRUNC('month',CURRENT_DATE)`, [gid]),
     ]);
     const ps = {}; statusPed.forEach(r => ps[r.status] = parseInt(r.n));
-    res.json({
-      totalCob: parseFloat(totalCob.t),
-      clientesCob: parseInt(clientesCob?.n || 0),
-      statusPedidos: ps,
-      matBaixo: parseInt(matBaixo.n),
-      entHoje: parseInt(entHoje.n),
-      entAtras: parseInt(entAtras.n),
-      cobAtras: parseInt(cobAtras.n),
-      ultPedidos,
-      topCob,
-    });
+    res.json({ totalCob: parseFloat(totalCob.t), clientesCob: parseInt(clientesCob?.n||0), statusPedidos: ps, matBaixo: parseInt(matBaixo.n), entHoje: parseInt(entHoje.n), entAtras: parseInt(entAtras.n), cobAtras: parseInt(cobAtras.n), ultPedidos, topCob, saldoCaixa: parseFloat(saldoCaixa.s) });
   } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro interno' }); }
 });
 
-// ─── RELATÓRIOS (Pro/Premium/Vitalício) ─────────────────────
+// ─── RELATÓRIOS ─────────────────────────────────────────────
 router.get('/relatorios', async (req, res) => {
   try {
     const gid = req.gid;
     const g = await db.one('SELECT plano FROM graficas WHERE id=$1', [gid]);
-    if (g.plano === 'gratuito') return res.status(403).json({ erro: 'Disponível apenas nos planos Pro, Premium e Vitalício.' });
-
-    const [
-      faturamentoMes, faturamentoMesAnterior,
-      totalRecebido, totalPendente,
-      ticketMedio, porTipo,
-      topClientes, pedidosPorStatus
-    ] = await Promise.all([
+    if (!temRelatorio(g.plano)) return res.status(403).json({ erro: 'Disponível nos planos Pro, Premium e Vitalício.' });
+    const [fat, fatAnt, recebido, pendente, ticket, porTipo, topCli, pedStatus] = await Promise.all([
       db.one(`SELECT COALESCE(SUM(valor_total),0) AS t FROM pedidos WHERE grafica_id=$1 AND DATE_TRUNC('month',criado_em)=DATE_TRUNC('month',NOW()) AND status!='cancelado'`, [gid]),
       db.one(`SELECT COALESCE(SUM(valor_total),0) AS t FROM pedidos WHERE grafica_id=$1 AND DATE_TRUNC('month',criado_em)=DATE_TRUNC('month',NOW()-INTERVAL '1 month') AND status!='cancelado'`, [gid]),
       db.one(`SELECT COALESCE(SUM(valor_pago),0) AS t FROM pedidos WHERE grafica_id=$1 AND DATE_TRUNC('month',criado_em)=DATE_TRUNC('month',NOW())`, [gid]),
@@ -83,18 +63,38 @@ router.get('/relatorios', async (req, res) => {
       db(`SELECT c.nome,c.apelido,COUNT(p.id) AS pedidos,COALESCE(SUM(p.valor_total),0) AS total FROM pedidos p JOIN clientes c ON p.cliente_id=c.id WHERE p.grafica_id=$1 AND p.status!='cancelado' GROUP BY c.id,c.nome,c.apelido ORDER BY total DESC LIMIT 5`, [gid]),
       db(`SELECT status, COUNT(*) AS n FROM pedidos WHERE grafica_id=$1 GROUP BY status`, [gid]),
     ]);
-
-    res.json({
-      faturamentoMes: parseFloat(faturamentoMes.t),
-      faturamentoMesAnterior: parseFloat(faturamentoMesAnterior.t),
-      totalRecebido: parseFloat(totalRecebido.t),
-      totalPendente: parseFloat(totalPendente.t),
-      ticketMedio: parseFloat(ticketMedio.t),
-      porTipo,
-      topClientes,
-      pedidosPorStatus,
-    });
+    res.json({ faturamentoMes: parseFloat(fat.t), faturamentoMesAnterior: parseFloat(fatAnt.t), totalRecebido: parseFloat(recebido.t), totalPendente: parseFloat(pendente.t), ticketMedio: parseFloat(ticket.t), porTipo, topClientes: topCli, pedidosPorStatus: pedStatus });
   } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro interno' }); }
+});
+
+// ─── CAIXA ──────────────────────────────────────────────────
+router.get('/caixa', async (req, res) => {
+  try {
+    const gid = req.gid;
+    const { mes } = req.query; // formato: YYYY-MM
+    const filtroMes = mes ? mes : new Date().toISOString().slice(0, 7);
+    const [movs, resumo] = await Promise.all([
+      db(`SELECT * FROM caixa WHERE grafica_id=$1 AND TO_CHAR(data,'YYYY-MM')=$2 ORDER BY data DESC, criado_em DESC`, [gid, filtroMes]),
+      db.one(`SELECT
+        COALESCE(SUM(CASE WHEN tipo='entrada' THEN valor ELSE 0 END),0) AS entradas,
+        COALESCE(SUM(CASE WHEN tipo='saida' THEN valor ELSE 0 END),0) AS saidas,
+        COALESCE(SUM(CASE WHEN tipo='entrada' THEN valor ELSE -valor END),0) AS saldo
+        FROM caixa WHERE grafica_id=$1 AND TO_CHAR(data,'YYYY-MM')=$2`, [gid, filtroMes]),
+      ]);
+    res.json({ movs, resumo, mes: filtroMes });
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro interno' }); }
+});
+
+router.post('/caixa', async (req, res) => {
+  const { tipo, valor, categoria, descricao, data } = req.body;
+  if (!tipo || !valor || parseFloat(valor) <= 0) return res.status(400).json({ erro: 'Dados inválidos' });
+  const m = await db.insert('INSERT INTO caixa (grafica_id,tipo,valor,categoria,descricao,data) VALUES ($1,$2,$3,$4,$5,$6)', [req.gid, tipo, parseFloat(valor), categoria || 'Outros', descricao || '', data || new Date().toISOString().split('T')[0]]);
+  res.json(m);
+});
+
+router.delete('/caixa/:id', async (req, res) => {
+  await db('DELETE FROM caixa WHERE id=$1 AND grafica_id=$2', [req.params.id, req.gid]);
+  res.json({ ok: true });
 });
 
 // ─── CLIENTES ───────────────────────────────────────────────
@@ -110,21 +110,19 @@ router.get('/clientes', async (req, res) => {
 });
 
 router.get('/clientes/:id', async (req, res) => {
-  const gid = req.gid;
-  const c = await db.one('SELECT * FROM clientes WHERE id=$1 AND grafica_id=$2', [req.params.id, gid]);
+  const c = await db.one('SELECT * FROM clientes WHERE id=$1 AND grafica_id=$2', [req.params.id, req.gid]);
   if (!c) return res.status(404).json({ erro: 'Não encontrado' });
-  c.saldo = await saldo(gid, c.id);
-  c.pedidos = await db('SELECT * FROM pedidos WHERE cliente_id=$1 AND grafica_id=$2 ORDER BY criado_em DESC', [c.id, gid]);
+  c.saldo = await saldo(req.gid, c.id);
+  c.pedidos = await db('SELECT * FROM pedidos WHERE cliente_id=$1 AND grafica_id=$2 ORDER BY criado_em DESC', [c.id, req.gid]);
   res.json(c);
 });
 
 router.post('/clientes', async (req, res) => {
-  const gid = req.gid;
-  const plano = await checarPlano(gid);
+  const plano = await checarPlano(req.gid);
   if (!plano.ok) return res.status(403).json({ erro: plano.erro });
   const { nome, apelido, telefone, instagram, endereco, observacoes } = req.body;
   if (!nome?.trim()) return res.status(400).json({ erro: 'Nome obrigatório' });
-  const c = await db.insert('INSERT INTO clientes (grafica_id,nome,apelido,telefone,instagram,endereco,observacoes) VALUES ($1,$2,$3,$4,$5,$6,$7)', [gid, nome.trim(), apelido||'', telefone||'', instagram||'', endereco||'', observacoes||'']);
+  const c = await db.insert('INSERT INTO clientes (grafica_id,nome,apelido,telefone,instagram,endereco,observacoes) VALUES ($1,$2,$3,$4,$5,$6,$7)', [req.gid, nome.trim(), apelido||'', telefone||'', instagram||'', endereco||'', observacoes||'']);
   res.json(c);
 });
 
@@ -162,12 +160,8 @@ router.post('/pedidos', async (req, res) => {
       'INSERT INTO pedidos (grafica_id,cliente_id,descricao,tipo,quantidade,valor_total,valor_pago,status,data_pedido,data_entrega,observacoes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *',
       [gid, cliente_id, descricao.trim(), tipo||'Outros', quantidade||1, vt, vp, status||'pendente', data_pedido||null, data_entrega||null, observacoes||'']
     );
-    if (vt - vp > 0) {
-      await client.query(
-        `INSERT INTO cobrancas (grafica_id,cliente_id,pedido_id,tipo,valor,descricao,data) VALUES ($1,$2,$3,'debito',$4,$5,$6)`,
-        [gid, cliente_id, ped.id, vt-vp, `Saldo: ${descricao}`, data_pedido || new Date().toISOString().split('T')[0]]
-      );
-    }
+    if (vt - vp > 0) await client.query(`INSERT INTO cobrancas (grafica_id,cliente_id,pedido_id,tipo,valor,descricao,data) VALUES ($1,$2,$3,'debito',$4,$5,$6)`, [gid, cliente_id, ped.id, vt-vp, `Saldo: ${descricao}`, data_pedido||new Date().toISOString().split('T')[0]]);
+    if (vp > 0) await client.query(`INSERT INTO caixa (grafica_id,tipo,valor,categoria,descricao,data) VALUES ($1,'entrada',$2,'Pedidos',$3,$4)`, [gid, vp, `Entrada: ${descricao}`, data_pedido||new Date().toISOString().split('T')[0]]);
     await client.query('COMMIT');
     res.json(ped);
   } catch (e) { await client.query('ROLLBACK'); console.error(e); res.status(500).json({ erro: 'Erro ao salvar' }); }
@@ -176,8 +170,7 @@ router.post('/pedidos', async (req, res) => {
 
 router.put('/pedidos/:id', async (req, res) => {
   const { descricao, tipo, quantidade, valor_total, valor_pago, status, data_pedido, data_entrega, observacoes } = req.body;
-  await db('UPDATE pedidos SET descricao=$1,tipo=$2,quantidade=$3,valor_total=$4,valor_pago=$5,status=$6,data_pedido=$7,data_entrega=$8,observacoes=$9 WHERE id=$10 AND grafica_id=$11',
-    [descricao, tipo, quantidade, valor_total, valor_pago, status, data_pedido||null, data_entrega||null, observacoes, req.params.id, req.gid]);
+  await db('UPDATE pedidos SET descricao=$1,tipo=$2,quantidade=$3,valor_total=$4,valor_pago=$5,status=$6,data_pedido=$7,data_entrega=$8,observacoes=$9 WHERE id=$10 AND grafica_id=$11', [descricao, tipo, quantidade, valor_total, valor_pago, status, data_pedido||null, data_entrega||null, observacoes, req.params.id, req.gid]);
   res.json({ ok: true });
 });
 
@@ -186,11 +179,9 @@ router.delete('/pedidos/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-// Baixa de estoque ao entrar em produção
 router.post('/pedidos/:id/baixa-estoque', async (req, res) => {
-  const { materiais } = req.body;
-  if (!materiais?.length) return res.status(400).json({ erro: 'Nenhum material informado' });
-  const gid = req.gid;
+  const { materiais } = req.body; const gid = req.gid;
+  if (!materiais?.length) return res.status(400).json({ erro: 'Nenhum material' });
   try {
     for (const m of materiais) {
       if (!m.quantidade || m.quantidade <= 0) continue;
@@ -198,10 +189,7 @@ router.post('/pedidos/:id/baixa-estoque', async (req, res) => {
       if (!mat) continue;
       const nova = Math.max(0, parseFloat(mat.quantidade) - parseFloat(m.quantidade));
       await db('UPDATE materiais SET quantidade=$1 WHERE id=$2', [nova, mat.id]);
-      await db(
-        'INSERT INTO logs (grafica_id,tipo,descricao) VALUES ($1,$2,$3)',
-        [gid, 'baixa_estoque', `Baixa: ${mat.nome} -${m.quantidade} ${mat.unidade} (Pedido #${req.params.id})`]
-      );
+      await db(`INSERT INTO logs (grafica_id,tipo,descricao) VALUES ($1,'baixa_estoque',$2)`, [gid, `Baixa: ${mat.nome} -${m.quantidade}${mat.unidade} (Pedido #${req.params.id})`]);
     }
     res.json({ ok: true });
   } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao dar baixa' }); }
@@ -209,32 +197,29 @@ router.post('/pedidos/:id/baixa-estoque', async (req, res) => {
 
 // ─── COBRANÇAS ──────────────────────────────────────────────
 router.get('/cobrancas', async (req, res) => {
-  const gid = req.gid;
   res.json(await db(`
     SELECT c.id,c.nome,c.apelido,c.telefone,
       COALESCE(SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END),0) AS saldo,
       MAX(CASE WHEN cb.tipo='debito' THEN cb.data END) AS ultimo
-    FROM clientes c
-    LEFT JOIN cobrancas cb ON cb.cliente_id=c.id AND cb.grafica_id=$1
-    WHERE c.grafica_id=$1
-    GROUP BY c.id
-    HAVING COALESCE(SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END),0) > 0
-    ORDER BY COALESCE(SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END),0) DESC`, [gid]));
+    FROM clientes c LEFT JOIN cobrancas cb ON cb.cliente_id=c.id AND cb.grafica_id=$1
+    WHERE c.grafica_id=$1 GROUP BY c.id
+    HAVING COALESCE(SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END),0)>0
+    ORDER BY COALESCE(SUM(CASE WHEN cb.tipo='debito' THEN cb.valor ELSE -cb.valor END),0) DESC`, [req.gid]));
 });
 
 router.post('/cobrancas', async (req, res) => {
   const { cliente_id, tipo, valor, descricao, data } = req.body;
   if (!cliente_id || !valor) return res.status(400).json({ erro: 'Dados incompletos' });
-  await db('INSERT INTO cobrancas (grafica_id,cliente_id,tipo,valor,descricao,data) VALUES ($1,$2,$3,$4,$5,$6)',
-    [req.gid, cliente_id, tipo||'debito', parseFloat(valor), descricao||'', data||new Date().toISOString().split('T')[0]]);
+  await db('INSERT INTO cobrancas (grafica_id,cliente_id,tipo,valor,descricao,data) VALUES ($1,$2,$3,$4,$5,$6)', [req.gid, cliente_id, tipo||'debito', parseFloat(valor), descricao||'', data||new Date().toISOString().split('T')[0]]);
+  // Se pagamento, registra no caixa automaticamente
+  if (tipo === 'pagamento') {
+    await db(`INSERT INTO caixa (grafica_id,tipo,valor,categoria,descricao,data) VALUES ($1,'entrada',$2,'Cobranças',$3,$4)`, [req.gid, parseFloat(valor), descricao||'Pagamento de cliente', data||new Date().toISOString().split('T')[0]]);
+  }
   res.json({ ok: true, saldo: await saldo(req.gid, cliente_id) });
 });
 
 router.get('/cobrancas/historico/:clienteId', async (req, res) => {
-  res.json(await db(
-    'SELECT cb.*,p.descricao AS pdesc FROM cobrancas cb LEFT JOIN pedidos p ON cb.pedido_id=p.id WHERE cb.cliente_id=$1 AND cb.grafica_id=$2 ORDER BY cb.data DESC,cb.criado_em DESC',
-    [req.params.clienteId, req.gid]
-  ));
+  res.json(await db('SELECT cb.*,p.descricao AS pdesc FROM cobrancas cb LEFT JOIN pedidos p ON cb.pedido_id=p.id WHERE cb.cliente_id=$1 AND cb.grafica_id=$2 ORDER BY cb.data DESC,cb.criado_em DESC', [req.params.clienteId, req.gid]));
 });
 
 // ─── MATERIAIS ──────────────────────────────────────────────
@@ -249,15 +234,13 @@ router.get('/materiais', async (req, res) => {
 router.post('/materiais', async (req, res) => {
   const { nome, categoria, quantidade, unidade, qtd_minima } = req.body;
   if (!nome?.trim()) return res.status(400).json({ erro: 'Nome obrigatório' });
-  const m = await db.insert('INSERT INTO materiais (grafica_id,nome,categoria,quantidade,unidade,qtd_minima) VALUES ($1,$2,$3,$4,$5,$6)',
-    [req.gid, nome.trim(), categoria||'Geral', parseFloat(quantidade)||0, unidade||'un', parseFloat(qtd_minima)||0]);
+  const m = await db.insert('INSERT INTO materiais (grafica_id,nome,categoria,quantidade,unidade,qtd_minima) VALUES ($1,$2,$3,$4,$5,$6)', [req.gid, nome.trim(), categoria||'Geral', parseFloat(quantidade)||0, unidade||'un', parseFloat(qtd_minima)||0]);
   res.json(m);
 });
 
 router.put('/materiais/:id', async (req, res) => {
   const { nome, categoria, quantidade, unidade, qtd_minima } = req.body;
-  await db('UPDATE materiais SET nome=$1,categoria=$2,quantidade=$3,unidade=$4,qtd_minima=$5 WHERE id=$6 AND grafica_id=$7',
-    [nome, categoria, parseFloat(quantidade)||0, unidade, parseFloat(qtd_minima)||0, req.params.id, req.gid]);
+  await db('UPDATE materiais SET nome=$1,categoria=$2,quantidade=$3,unidade=$4,qtd_minima=$5 WHERE id=$6 AND grafica_id=$7', [nome, categoria, parseFloat(quantidade)||0, unidade, parseFloat(qtd_minima)||0, req.params.id, req.gid]);
   res.json({ ok: true });
 });
 
@@ -276,7 +259,7 @@ router.post('/materiais/:id/mov', async (req, res) => {
   res.json({ ok: true, quantidade: nova });
 });
 
-// ─── CONFIGURAÇÕES ──────────────────────────────────────────
+// ─── CONFIG ─────────────────────────────────────────────────
 router.get('/config', async (req, res) => {
   const g = await db.one('SELECT id,nome,email,plano,plano_expira FROM graficas WHERE id=$1', [req.gid]);
   res.json(g);

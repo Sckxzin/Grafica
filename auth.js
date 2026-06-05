@@ -1,5 +1,4 @@
 const jwt = require('jsonwebtoken');
-
 const SECRET = () => process.env.JWT_SECRET;
 
 function auth(req, res, next) {
@@ -8,12 +7,8 @@ function auth(req, res, next) {
   try {
     const p = jwt.verify(token, SECRET());
     if (p.role !== 'grafica') return res.status(403).json({ erro: 'Acesso negado' });
-    req.gid = p.id;
-    req.grafica = p;
-    next();
-  } catch {
-    res.status(401).json({ erro: 'Token inválido ou expirado' });
-  }
+    req.gid = p.id; req.grafica = p; next();
+  } catch { res.status(401).json({ erro: 'Token inválido ou expirado' }); }
 }
 
 function authAdmin(req, res, next) {
@@ -22,11 +17,8 @@ function authAdmin(req, res, next) {
   try {
     const p = jwt.verify(token, SECRET());
     if (p.role !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
-    req.admin = p;
-    next();
-  } catch {
-    res.status(401).json({ erro: 'Token inválido ou expirado' });
-  }
+    req.admin = p; next();
+  } catch { res.status(401).json({ erro: 'Token inválido ou expirado' }); }
 }
 
 function token(payload, expira = '30d') {
