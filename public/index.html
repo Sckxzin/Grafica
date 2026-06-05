@@ -528,6 +528,12 @@ async function salvarCobranca(){const val=parseFloat($('cob-valor').value);if(!v
 
 // CAIXA
 async function carregarCaixa(){
+  const g=await api('/config');
+  if(!g)return;
+  if(!['pro','premium','vitalicio'].includes(g.plano)){
+    $('page-caixa').innerHTML='<div style="text-align:center;padding:60px 24px"><div style="font-size:40px;margin-bottom:14px">&#128274;</div><div style="font-family:\'Playfair Display\',serif;font-size:18px;color:var(--gold);margin-bottom:8px">Recurso exclusivo</div><div style="font-size:13px;color:var(--t2)">Fluxo de Caixa disponível nos planos Pro, Premium e Vitálicio.</div></div>';
+    return;
+  }
   const mes=$('caixa-mes')?.value||mesAtual();
   const d=await api('/caixa?mes='+mes);if(!d)return;
   _caixaMovs=d.movs||[];

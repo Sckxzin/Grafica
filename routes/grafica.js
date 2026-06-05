@@ -70,6 +70,8 @@ router.get('/relatorios', async (req, res) => {
 // ─── CAIXA ──────────────────────────────────────────────────
 router.get('/caixa', async (req, res) => {
   try {
+    const gp = await db.one('SELECT plano FROM graficas WHERE id=$1', [req.gid]);
+    if (!['pro','premium','vitalicio'].includes(gp.plano)) return res.status(403).json({ erro: 'Disponível nos planos Pro, Premium e Vitalício.' });
     const gid = req.gid;
     const { mes } = req.query; // formato: YYYY-MM
     const filtroMes = mes ? mes : new Date().toISOString().slice(0, 7);
@@ -86,6 +88,8 @@ router.get('/caixa', async (req, res) => {
 });
 
 router.post('/caixa', async (req, res) => {
+  const gp = await db.one('SELECT plano FROM graficas WHERE id=$1', [req.gid]);
+  if (!['pro','premium','vitalicio'].includes(gp.plano)) return res.status(403).json({ erro: 'Disponível nos planos Pro, Premium e Vitalício.' });
   const { tipo, valor, categoria, descricao, data } = req.body;
   if (!tipo || !valor || parseFloat(valor) <= 0) return res.status(400).json({ erro: 'Dados inválidos' });
   const m = await db.insert('INSERT INTO caixa (grafica_id,tipo,valor,categoria,descricao,data) VALUES ($1,$2,$3,$4,$5,$6)', [req.gid, tipo, parseFloat(valor), categoria || 'Outros', descricao || '', data || new Date().toISOString().split('T')[0]]);
@@ -93,6 +97,8 @@ router.post('/caixa', async (req, res) => {
 });
 
 router.delete('/caixa/:id', async (req, res) => {
+  const gp = await db.one('SELECT plano FROM graficas WHERE id=$1', [req.gid]);
+  if (!['pro','premium','vitalicio'].includes(gp.plano)) return res.status(403).json({ erro: 'Disponível nos planos Pro, Premium e Vitalício.' });
   await db('DELETE FROM caixa WHERE id=$1 AND grafica_id=$2', [req.params.id, req.gid]);
   res.json({ ok: true });
 });
