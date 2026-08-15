@@ -49,8 +49,10 @@ async function setup() {
         instagram   TEXT,
         endereco    TEXT,
         observacoes TEXT,
+        aniversario DATE,
         criado_em   TIMESTAMP DEFAULT NOW()
       );
+      ALTER TABLE clientes ADD COLUMN IF NOT EXISTS aniversario DATE;
       CREATE TABLE IF NOT EXISTS pedidos (
         id            SERIAL PRIMARY KEY,
         grafica_id    INT NOT NULL REFERENCES graficas(id) ON DELETE CASCADE,
@@ -97,6 +99,14 @@ async function setup() {
         data        DATE DEFAULT CURRENT_DATE,
         criado_em   TIMESTAMP DEFAULT NOW()
       );
+      CREATE TABLE IF NOT EXISTS metas (
+        id          SERIAL PRIMARY KEY,
+        grafica_id  INT NOT NULL REFERENCES graficas(id) ON DELETE CASCADE,
+        mes         TEXT NOT NULL,
+        valor_meta  NUMERIC(10,2) NOT NULL,
+        criado_em   TIMESTAMP DEFAULT NOW(),
+        UNIQUE (grafica_id, mes)
+      );
       CREATE INDEX IF NOT EXISTS idx_clientes_gid  ON clientes(grafica_id);
       CREATE INDEX IF NOT EXISTS idx_pedidos_gid   ON pedidos(grafica_id);
       CREATE INDEX IF NOT EXISTS idx_cobrancas_gid ON cobrancas(grafica_id);
@@ -104,6 +114,7 @@ async function setup() {
       CREATE INDEX IF NOT EXISTS idx_caixa_gid     ON caixa(grafica_id);
       CREATE INDEX IF NOT EXISTS idx_caixa_data    ON caixa(data DESC);
       CREATE INDEX IF NOT EXISTS idx_logs_gid      ON logs(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_metas_gid     ON metas(grafica_id);
     `);
     await client.query('COMMIT');
     console.log('✅ Tabelas prontas!');
