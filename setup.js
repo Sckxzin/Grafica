@@ -107,14 +107,29 @@ async function setup() {
         criado_em   TIMESTAMP DEFAULT NOW(),
         UNIQUE (grafica_id, mes)
       );
-      CREATE INDEX IF NOT EXISTS idx_clientes_gid  ON clientes(grafica_id);
-      CREATE INDEX IF NOT EXISTS idx_pedidos_gid   ON pedidos(grafica_id);
-      CREATE INDEX IF NOT EXISTS idx_cobrancas_gid ON cobrancas(grafica_id);
-      CREATE INDEX IF NOT EXISTS idx_materiais_gid ON materiais(grafica_id);
-      CREATE INDEX IF NOT EXISTS idx_caixa_gid     ON caixa(grafica_id);
-      CREATE INDEX IF NOT EXISTS idx_caixa_data    ON caixa(data DESC);
-      CREATE INDEX IF NOT EXISTS idx_logs_gid      ON logs(grafica_id);
-      CREATE INDEX IF NOT EXISTS idx_metas_gid     ON metas(grafica_id);
+      CREATE TABLE IF NOT EXISTS orcamentos (
+        id          SERIAL PRIMARY KEY,
+        grafica_id  INT NOT NULL REFERENCES graficas(id) ON DELETE CASCADE,
+        cliente_id  INT NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+        descricao   TEXT NOT NULL,
+        tipo        TEXT DEFAULT 'Outros',
+        quantidade  INT DEFAULT 1,
+        valor_total NUMERIC(10,2) DEFAULT 0,
+        validade    DATE,
+        observacoes TEXT,
+        status      TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente','aprovado','recusado')),
+        pedido_id   INT REFERENCES pedidos(id) ON DELETE SET NULL,
+        criado_em   TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_clientes_gid   ON clientes(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_pedidos_gid    ON pedidos(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_cobrancas_gid  ON cobrancas(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_materiais_gid  ON materiais(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_caixa_gid      ON caixa(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_caixa_data     ON caixa(data DESC);
+      CREATE INDEX IF NOT EXISTS idx_logs_gid       ON logs(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_orcamentos_gid ON orcamentos(grafica_id);
+      CREATE INDEX IF NOT EXISTS idx_metas_gid      ON metas(grafica_id);
     `);
     await client.query('COMMIT');
     console.log('✅ Tabelas prontas!');
