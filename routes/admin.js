@@ -3,14 +3,13 @@ const bcrypt = require('bcryptjs');
 const { db } = require('../db');
 const { token, authAdmin } = require('../auth');
 
-const ip = req => req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || '?';
+const ip = req => req.ip || '?';
 
 router.post('/setup', async (req, res) => {
   try {
     const { nome, email, senha, setup_key } = req.body;
     const esperada = (process.env.ADMIN_SETUP_KEY || '').trim();
     const recebida = (setup_key || '').trim();
-    console.log(`[SETUP] esperada="${esperada}" recebida="${recebida}"`);
     if (!esperada) return res.status(500).json({ erro: 'ADMIN_SETUP_KEY não configurada' });
     if (recebida !== esperada) return res.status(403).json({ erro: 'Chave inválida' });
     const total = await db.one('SELECT COUNT(*) AS n FROM admins');
