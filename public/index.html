@@ -215,6 +215,7 @@ input[type=number]{-moz-appearance:textfield}input[type=number]::-webkit-inner-s
       <div class="fg"><label class="fl">E-mail</label><input class="fi" type="email" id="l-email" placeholder="seu@email.com"></div>
       <div class="fg"><label class="fl">Senha</label><input class="fi" type="password" id="l-senha" onkeydown="if(event.key==='Enter')login()"></div>
       <button class="btn btn-gold btn-full" id="btn-login" onclick="login()">Entrar</button>
+      <p style="text-align:center;margin-top:10px"><button style="background:none;border:none;color:var(--t3);font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif" onclick="abrirEsqueciSenha()">Esqueci minha senha</button></p>
     </div>
     <div id="form-cadastro" style="display:none">
       <div class="fg"><label class="fl">Nome da gr&#225;fica</label><input class="fi" id="c-nome" placeholder="Ex: Arte &amp; Festa"></div>
@@ -442,6 +443,16 @@ input[type=number]{-moz-appearance:textfield}input[type=number]::-webkit-inner-s
 </div>
 
 <!-- MODAIS -->
+<div class="overlay" id="ov-esqueci"><div class="modal">
+  <div class="modal-hd"><h3>Esqueci minha senha</h3><button class="btn btn-sm" onclick="fechar('ov-esqueci')">&#10005;</button></div>
+  <div class="modal-bd">
+    <p style="font-size:13px;color:var(--t2);margin-bottom:13px">Informe o e-mail da sua conta. Se ele existir, enviaremos um link para redefinir a senha.</p>
+    <div class="fg"><label class="fl">E-mail</label><input class="fi" type="email" id="esq-email" placeholder="seu@email.com" onkeydown="if(event.key==='Enter')enviarEsqueciSenha()"></div>
+    <div id="esq-msg" style="font-size:13px;display:none;margin-top:8px"></div>
+  </div>
+  <div class="modal-ft"><button class="btn" onclick="fechar('ov-esqueci')">Cancelar</button><button class="btn btn-gold" id="btn-esqueci" onclick="enviarEsqueciSenha()">Enviar link</button></div>
+</div></div>
+
 <div class="overlay" id="ov-orc"><div class="modal modal-lg">
   <div class="modal-hd"><h3 id="orc-title">Novo Or&#231;amento</h3><button class="btn btn-sm" onclick="fechar('ov-orc')">&#10005;</button></div>
   <div class="modal-bd">
@@ -593,6 +604,15 @@ async function admApi(path,opts={}){
 
 // AUTH
 function authTab(t){document.querySelectorAll('.auth-tab').forEach((el,i)=>el.classList.toggle('active',t==='login'?i===0:i===1));$('form-login').style.display=t==='login'?'block':'none';$('form-cadastro').style.display=t==='cadastro'?'block':'none';$('auth-err').style.display='none'}
+function abrirEsqueciSenha(){$('esq-email').value=$('l-email').value||'';$('esq-msg').style.display='none';abrir('ov-esqueci')}
+async function enviarEsqueciSenha(){
+  const email=$('esq-email').value.trim();if(!email){return}
+  const btn=$('btn-esqueci');btn.disabled=true;btn.textContent='Enviando...';
+  const r=await fetch('/api/auth/esqueci-senha',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+  const d=await r.json();btn.disabled=false;btn.textContent='Enviar link';
+  const msg=$('esq-msg');msg.style.display='block';
+  msg.innerHTML=r.ok?`<span class="v-pos">${esc(d.mensagem)}</span>`:`<span class="v-neg">${esc(d.erro||'Erro ao enviar.')}</span>`;
+}
 function authErr(msg){const e=$('auth-err');e.textContent=msg;e.style.display='block'}
 async function login(){
   const email=$('l-email').value.trim(),senha=$('l-senha').value;if(!email||!senha){authErr('Preencha e-mail e senha.');return}

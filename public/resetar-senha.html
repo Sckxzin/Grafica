@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Redefinir senha — XzinTech</title>
+<style>
+  :root{--bg:#0d0d0d;--card:#161616;--border:#2a2a2a;--text:#f0f0f0;--t2:#c4c4c4;--t3:#8a8a8a;--gold:#c9a84c;--red:#e57373;--green:#4caf82}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse 70% 50% at 50% 0%,rgba(201,168,76,0.05) 0%,transparent 70%) var(--bg);color:var(--text);font-family:'DM Sans',-apple-system,sans-serif;padding:20px}
+  .box{width:100%;max-width:380px;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:32px}
+  h1{font-family:'Playfair Display',Georgia,serif;color:var(--gold);font-size:22px;margin:0 0 6px;text-align:center}
+  p.sub{color:var(--t3);font-size:13px;text-align:center;margin:0 0 24px}
+  label{display:block;font-size:12px;color:var(--t3);margin-bottom:6px}
+  input{width:100%;background:#0d0d0d;border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:14px;margin-bottom:14px}
+  input:focus{outline:none;border-color:var(--gold)}
+  button{width:100%;background:var(--gold);border:none;border-radius:8px;padding:11px;color:#111;font-weight:600;font-size:14px;cursor:pointer}
+  button:disabled{opacity:.6;cursor:default}
+  .msg{font-size:13px;text-align:center;margin-top:14px}
+  .msg.err{color:var(--red)}
+  .msg.ok{color:var(--green)}
+  a{color:var(--gold);font-size:13px}
+  .back{display:block;text-align:center;margin-top:18px}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>Redefinir senha</h1>
+  <p class="sub">Escolha uma nova senha para sua conta.</p>
+  <div id="form">
+    <label for="senha">Nova senha</label>
+    <input type="password" id="senha" placeholder="Mínimo 6 caracteres">
+    <label for="senha2">Confirmar nova senha</label>
+    <input type="password" id="senha2" onkeydown="if(event.key==='Enter')enviar()">
+    <button id="btn" onclick="enviar()">Redefinir senha</button>
+  </div>
+  <div id="msg" class="msg" style="display:none"></div>
+  <a class="back" href="/">&#8592; Voltar para o login</a>
+</div>
+<script>
+const params = new URLSearchParams(location.search);
+const token = params.get('token');
+const $ = id => document.getElementById(id);
+
+if (!token) {
+  $('form').style.display = 'none';
+  $('msg').style.display = 'block';
+  $('msg').className = 'msg err';
+  $('msg').textContent = 'Link inválido. Solicite um novo link de redefinição na tela de login.';
+}
+
+async function enviar() {
+  const senha = $('senha').value, senha2 = $('senha2').value;
+  if (!senha || senha.length < 6) { mostrar('A senha precisa ter no mínimo 6 caracteres.', false); return; }
+  if (senha !== senha2) { mostrar('As senhas não coincidem.', false); return; }
+  const btn = $('btn'); btn.disabled = true; btn.textContent = 'Redefinindo...';
+  const r = await fetch('/api/auth/resetar-senha', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, nova_senha: senha }),
+  });
+  const d = await r.json();
+  btn.disabled = false; btn.textContent = 'Redefinir senha';
+  if (r.ok) {
+    $('form').style.display = 'none';
+    mostrar('Senha redefinida! Você já pode fazer login com a nova senha.', true);
+  } else {
+    mostrar(d.erro || 'Erro ao redefinir a senha.', false);
+  }
+}
+
+function mostrar(texto, ok) {
+  const msg = $('msg');
+  msg.style.display = 'block';
+  msg.className = 'msg ' + (ok ? 'ok' : 'err');
+  msg.textContent = texto;
+}
+</script>
+</body>
+</html>
