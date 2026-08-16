@@ -15,8 +15,12 @@ async function setup() {
         ativo           BOOLEAN DEFAULT true,
         motivo_bloqueio TEXT,
         ultimo_acesso   TIMESTAMP,
+        reset_token     TEXT,
+        reset_expira    TIMESTAMP,
         criado_em       TIMESTAMP DEFAULT NOW()
       );
+      ALTER TABLE graficas ADD COLUMN IF NOT EXISTS reset_token TEXT;
+      ALTER TABLE graficas ADD COLUMN IF NOT EXISTS reset_expira TIMESTAMP;
       CREATE TABLE IF NOT EXISTS admins (
         id          SERIAL PRIMARY KEY,
         nome        TEXT NOT NULL,
