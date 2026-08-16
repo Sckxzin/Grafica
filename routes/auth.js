@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const { db } = require('../db');
 const { token, auth } = require('../auth');
 
-const ip = req => req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || '?';
+const ip = req => req.ip || '?';
 
 async function bloqueado(email, ipAddr) {
   const r = await db.one(`SELECT COUNT(*) AS n FROM tentativas WHERE email=$1 AND ip=$2 AND ok=false AND criado_em>NOW()-INTERVAL '15 minutes'`, [email, ipAddr]);

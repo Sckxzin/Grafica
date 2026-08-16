@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { db, pool } = require('../db');
 const { auth } = require('../auth');
+const { orcamentoPdf } = require('../pdf');
 
 router.use(auth);
 
@@ -59,7 +60,7 @@ router.get('/painel', async (req, res) => {
     const gid = req.gid;
     const g = await db.one('SELECT plano FROM graficas WHERE id=$1', [gid]);
     const pl = getPlano(g.plano);
-    const [totalCob, clientesCob, statusPed, matBaixo, entHoje, entAtras, cobAtras, ultPedidos, topCob, saldoCaixa, aniversarios, entAmanha] = await Promise.all([
+    const [totalCob, clientesCob, statusPed, matBaixo, entHoje, entAtras, cobAtras, ultPedidos, topCob, saldoCaixa, aniversarios, entAmanha, orcPendentes] = await Promise.all([
       db.one(`SELECT COALESCE(SUM(CASE WHEN tipo='debito' THEN valor ELSE -valor END),0) AS t FROM cobrancas WHERE grafica_id=$1`, [gid]),
       db.one(`SELECT COUNT(*) AS n FROM (SELECT cliente_id FROM cobrancas WHERE grafica_id=$1 GROUP BY cliente_id HAVING SUM(CASE WHEN tipo='debito' THEN valor ELSE -valor END)>0) t`, [gid]),
       db(`SELECT status, COUNT(*) AS n FROM pedidos WHERE grafica_id=$1 GROUP BY status`, [gid]),
@@ -72,9 +73,10 @@ router.get('/painel', async (req, res) => {
       pl.caixa ? db.one(`SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN valor ELSE -valor END),0) AS s FROM caixa WHERE grafica_id=$1 AND DATE_TRUNC('month',data)=DATE_TRUNC('month',CURRENT_DATE)`, [gid]) : { s: 0 },
       db(`SELECT nome,apelido FROM clientes WHERE grafica_id=$1 AND aniversario IS NOT NULL AND EXTRACT(MONTH FROM aniversario)=EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(DAY FROM aniversario)=EXTRACT(DAY FROM CURRENT_DATE)`, [gid]),
       db(`SELECT p.*,c.nome AS cnome,c.apelido AS capelido,c.telefone AS ctel FROM pedidos p JOIN clientes c ON p.cliente_id=c.id WHERE p.grafica_id=$1 AND p.data_entrega=CURRENT_DATE+1 AND p.status NOT IN ('entregue','cancelado')`, [gid]),
+      db.one(`SELECT COUNT(*) AS n FROM orcamentos WHERE grafica_id=$1 AND status='pendente'`, [gid]),
     ]);
     const ps = {}; statusPed.forEach(r => ps[r.status] = parseInt(r.n));
-    res.json({ totalCob: parseFloat(totalCob.t), clientesCob: parseInt(clientesCob?.n||0), statusPedidos: ps, matBaixo: parseInt(matBaixo.n), entHoje: parseInt(entHoje.n), entAtras: parseInt(entAtras.n), cobAtras: parseInt(cobAtras.n), ultPedidos, topCob, saldoCaixa: parseFloat(saldoCaixa.s), aniversarios, entAmanha, plano: g.plano, recursos: pl });
+    res.json({ totalCob: parseFloat(totalCob.t), clientesCob: parseInt(clientesCob?.n||0), statusPedidos: ps, matBaixo: parseInt(matBaixo.n), entHoje: parseInt(entHoje.n), entAtras: parseInt(entAtras.n), cobAtras: parseInt(cobAtras.n), ultPedidos, topCob, saldoCaixa: parseFloat(saldoCaixa.s), aniversarios, entAmanha, orcPendentes: parseInt(orcPendentes.n), plano: g.plano, recursos: pl });
   } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro interno' }); }
 });
 
@@ -289,6 +291,87 @@ router.put('/clientes/:id', async (req, res) => {
 router.delete('/clientes/:id', async (req, res) => {
   await db('DELETE FROM clientes WHERE id=$1 AND grafica_id=$2', [req.params.id, req.gid]);
   res.json({ ok: true });
+});
+
+// ─── ORÇAMENTOS ─────────────────────────────────────────────
+router.get('/orcamentos', async (req, res) => {
+  try {
+    const { status, busca } = req.query; const gid = req.gid;
+    let sql = `SELECT o.*,c.nome AS cnome,c.apelido AS capelido,c.telefone AS ctel FROM orcamentos o JOIN clientes c ON o.cliente_id=c.id WHERE o.grafica_id=$1`;
+    const p = [gid];
+    if (status) { sql += ` AND o.status=$${p.length+1}`; p.push(status); }
+    if (busca)  { sql += ` AND (o.descricao ILIKE $${p.length+1} OR c.nome ILIKE $${p.length+1})`; p.push(`%${busca}%`); }
+    sql += ' ORDER BY o.criado_em DESC';
+    res.json(await db(sql, p));
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro interno' }); }
+});
+
+router.post('/orcamentos', async (req, res) => {
+  try {
+    const gid = req.gid;
+    const { cliente_id, descricao, tipo, quantidade, valor_total, validade, observacoes } = req.body;
+    if (!cliente_id || !descricao?.trim()) return res.status(400).json({ erro: 'Cliente e descrição obrigatórios' });
+    const o = await db.insert('INSERT INTO orcamentos (grafica_id,cliente_id,descricao,tipo,quantidade,valor_total,validade,observacoes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [gid, cliente_id, descricao.trim(), tipo||'Outros', quantidade||1, parseFloat(valor_total)||0, validade||null, observacoes||'']);
+    res.json(o);
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao salvar' }); }
+});
+
+router.put('/orcamentos/:id', async (req, res) => {
+  try {
+    const { cliente_id, descricao, tipo, quantidade, valor_total, validade, observacoes } = req.body;
+    const o = await db.one('SELECT status FROM orcamentos WHERE id=$1 AND grafica_id=$2', [req.params.id, req.gid]);
+    if (!o) return res.status(404).json({ erro: 'Não encontrado' });
+    if (o.status !== 'pendente') return res.status(400).json({ erro: 'Só é possível editar orçamentos pendentes' });
+    await db('UPDATE orcamentos SET cliente_id=$1,descricao=$2,tipo=$3,quantidade=$4,valor_total=$5,validade=$6,observacoes=$7 WHERE id=$8 AND grafica_id=$9', [cliente_id, descricao, tipo, quantidade||1, parseFloat(valor_total)||0, validade||null, observacoes||'', req.params.id, req.gid]);
+    res.json({ ok: true });
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao atualizar' }); }
+});
+
+router.delete('/orcamentos/:id', async (req, res) => {
+  await db('DELETE FROM orcamentos WHERE id=$1 AND grafica_id=$2', [req.params.id, req.gid]);
+  res.json({ ok: true });
+});
+
+router.patch('/orcamentos/:id/status', async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!['pendente','aprovado','recusado'].includes(status)) return res.status(400).json({ erro: 'Status inválido' });
+    const o = await db.one('SELECT id FROM orcamentos WHERE id=$1 AND grafica_id=$2', [req.params.id, req.gid]);
+    if (!o) return res.status(404).json({ erro: 'Não encontrado' });
+    await db('UPDATE orcamentos SET status=$1 WHERE id=$2', [status, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao atualizar' }); }
+});
+
+// Converte orçamento aprovado em pedido oficial
+router.post('/orcamentos/:id/converter', async (req, res) => {
+  const gid = req.gid;
+  const orc = await db.one('SELECT * FROM orcamentos WHERE id=$1 AND grafica_id=$2', [req.params.id, gid]);
+  if (!orc) return res.status(404).json({ erro: 'Orçamento não encontrado' });
+  if (orc.pedido_id) return res.status(400).json({ erro: 'Este orçamento já foi convertido em pedido' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const hoje = new Date().toISOString().split('T')[0];
+    const { rows: [ped] } = await client.query(`INSERT INTO pedidos (grafica_id,cliente_id,descricao,tipo,quantidade,valor_total,valor_pago,status,data_pedido,observacoes) VALUES ($1,$2,$3,$4,$5,$6,0,'pendente',$7,$8) RETURNING *`, [gid, orc.cliente_id, orc.descricao, orc.tipo, orc.quantidade, orc.valor_total, hoje, orc.observacoes||'']);
+    if (orc.valor_total > 0) await client.query(`INSERT INTO cobrancas (grafica_id,cliente_id,pedido_id,tipo,valor,descricao,data) VALUES ($1,$2,$3,'debito',$4,$5,$6)`, [gid, orc.cliente_id, ped.id, orc.valor_total, `Saldo: ${orc.descricao}`, hoje]);
+    await client.query(`UPDATE orcamentos SET status='aprovado', pedido_id=$1 WHERE id=$2`, [ped.id, orc.id]);
+    await client.query('COMMIT');
+    res.json(ped);
+  } catch (e) { await client.query('ROLLBACK'); console.error(e); res.status(500).json({ erro: 'Erro ao converter' }); }
+  finally { client.release(); }
+});
+
+router.get('/orcamentos/:id/pdf', async (req, res) => {
+  try {
+    const gid = req.gid;
+    const orc = await db.one(`SELECT o.*,c.nome AS cnome,c.apelido AS capelido,c.telefone AS ctel FROM orcamentos o JOIN clientes c ON o.cliente_id=c.id WHERE o.id=$1 AND o.grafica_id=$2`, [req.params.id, gid]);
+    if (!orc) return res.status(404).json({ erro: 'Não encontrado' });
+    const g = await db.one('SELECT nome FROM graficas WHERE id=$1', [gid]);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="orcamento-${orc.id}.pdf"`);
+    orcamentoPdf(orc, g, res);
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao gerar PDF' }); }
 });
 
 // ─── PEDIDOS ────────────────────────────────────────────────
